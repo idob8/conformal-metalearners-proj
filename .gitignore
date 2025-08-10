@@ -1,0 +1,6 @@
+
+# Experiment results
+logs/
+figures/
+__pycache__/
+*.pyc
