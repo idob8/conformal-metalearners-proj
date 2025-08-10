@@ -46,7 +46,7 @@ class conformalMetalearner:
 
   """
   
-  def __init__(self, n_folds=5, alpha=0.1, base_learner="GBM", quantile_regression=True, metalearner="DR"):
+  def __init__(self, n_folds=5, alpha=0.1, base_learner="GBM", quantile_regression=True, metalearner="DR", jackknife_plus=False):
 
     """
         :param n_folds: the number of folds for the DR learner cross-fitting (See [1])
@@ -55,12 +55,14 @@ class conformalMetalearner:
                              - current options: ["GBM": gradient boosting machines, "RF": random forest]
         :param quantile_regression: Boolean for indicating whether the base learner is a quantile regression model
                                     or a point estimate of the CATE function. 
+        :param jackknife_plus: Boolean for indicating whether to use Jackknife+ (ignores conformalize step)
 
     """
 
     # set base learner
     self.base_learner        = base_learner
     self.quantile_regression = quantile_regression
+    self.jackknife_plus      = jackknife_plus
     n_estimators_nuisance    = 100
     n_estimators_target      = 100
     alpha_ = alpha #0.3 #
@@ -191,10 +193,10 @@ class conformalMetalearner:
       T_hat_DR_u = np.mean(np.array(y_preds_u), axis=0).reshape((-1,))
       T_hat_DR   = (T_hat_DR_l + T_hat_DR_u) / 2
 
-      # add conformal offset
-
-      T_hat_DR_l = T_hat_DR_l - self.offset
-      T_hat_DR_u = T_hat_DR_u + self.offset
+      # add conformal offset (only if not using Jackknife+)
+      if not self.jackknife_plus:
+          T_hat_DR_l = T_hat_DR_l - self.offset
+          T_hat_DR_u = T_hat_DR_u + self.offset
     
     else:
 
@@ -206,10 +208,13 @@ class conformalMetalearner:
 
       T_hat_DR   = np.mean(np.array(y_preds_m), axis=0).reshape((-1,))
 
-      # add conformal offset
-
-      T_hat_DR_l = T_hat_DR - self.offset
-      T_hat_DR_u = T_hat_DR+ self.offset
+      # add conformal offset (only if not using Jackknife+)
+      if not self.jackknife_plus:
+          T_hat_DR_l = T_hat_DR - self.offset
+          T_hat_DR_u = T_hat_DR + self.offset
+      else:
+          T_hat_DR_l = T_hat_DR
+          T_hat_DR_u = T_hat_DR
 
     return T_hat_DR, T_hat_DR_l, T_hat_DR_u 
 
