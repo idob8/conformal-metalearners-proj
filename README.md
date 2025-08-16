@@ -41,3 +41,10 @@ If you use our code in your research, please cite:
   year={2023}
 }
 ```
+## Project Extension
+We added an option to use Jacknife+ algorithm for avoiding a big calibration set.
+We made the k-fold mechanism in the nuaiance and MATE models optional in order to study it's contribution.
+In order to enable those option you should use those flags: 
+```
+python run_conformal_metalearners.py -j True -k True
+```
