@@ -60,9 +60,15 @@ def run_experiment(alpha=0.1, n=1000, d=10, nexps=10,
                    path=None,
                    save=True, 
                    plot=True, 
-                   logger=None):
+                   logger=None,
+                   use_jackknife_plus=False,
+                   no_kfold=False):
     
-    print             = logger.info
+    if logger is not None:
+        print             = logger.info
+    else:
+        print             = print
+        
     print("Loading '% s' dataset" % experiment_name)
     
     if experiment_name=="Synthetic":
@@ -85,13 +91,14 @@ def run_experiment(alpha=0.1, n=1000, d=10, nexps=10,
     for baseline in baselines:
         
         print("Running the '% s' learner baseline" % baseline)
-        
         experiments[baseline] = run(dataset, 
                                     conformal_metalearner_experiment, 
                                     metalearner=baseline, 
                                     quantile_regression=quantile_regression, 
                                     alpha=alpha, 
-                                    test_frac=test_frac)
+                                    test_frac=test_frac,
+                                    use_jackknife_plus=use_jackknife_plus,
+                                    no_kfold=no_kfold)
     
     
     experiment_list                        = [experiments[key] for key in list(experiments.keys())]
@@ -102,8 +109,8 @@ def run_experiment(alpha=0.1, n=1000, d=10, nexps=10,
                                               RMSE]
     
     if plot:
-    
-        evaluate_stochastic_orders(experiments, path=path, save=save, experiment_name=experiment_name)
+        if not use_jackknife_plus:
+            evaluate_stochastic_orders(experiments, path=path, save=save, experiment_name=experiment_name)
     
         plot_results(baseline_names=baselines, 
                      results_data=Results_data, 
@@ -121,7 +128,7 @@ def run_coverage_sweeps(alphas=[0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 
                         n=1000, d=10, nexps=10, quantile_regression=True, test_frac=0.1, 
                         baselines=["DR", "IPW", "X"], experiment_name="Synthetic", path=None,
                         filenames=["Coverage_sweep", "AveLength_sweep", "RMSE_sweep"], 
-                        setup="A", save=True, logger=None):
+                        setup="A", save=True, logger=None, use_jackknife_plus=False, no_kfold=False):
     
     print    = logger.info
     Results_ = []
@@ -136,7 +143,18 @@ def run_coverage_sweeps(alphas=[0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 
                                          setup=setup,
                                          path=path,
                                          save=False,
-                                         plot=False)
+                                         plot=False,
+                                         logger=logger,
+                                         use_jackknife_plus=use_jackknife_plus,
+                                         no_kfold=no_kfold)
+        
+        result_summary            = np.mean(np.array(Results_data), axis=2)
+    
+        for u in range(len(baselines)):
+            print("Alpha: %.2f, %s -> Coverage: %.3f | Avg. Interval Length: %.3f | RMSE: %.3f  " % (alpha, baselines[u], 
+                                                                                    result_summary[0, u],
+                                                                                    result_summary[1, u],
+                                                                                    result_summary[2, u]))
     
         Results_.append(Results_data)
 
@@ -159,7 +177,6 @@ def run_coverage_sweeps(alphas=[0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 
 # Main script
 
 def main(args):
-
     exp_log_time  = str(datetime.now())
     
     logging.basicConfig(filename="logs/conformal_metalearners " + exp_log_time + ".log", 
@@ -186,6 +203,8 @@ def main(args):
     alpha         = args.target_coverage
     sweep_exp     = args.sweep_experiments
     plot_flag     = args.plot
+    jackknife_plus = args.use_jackknife_plus
+    no_kfold = args.no_kfold
     
     logger.info("Starting the experiments...")
     
@@ -201,7 +220,9 @@ def main(args):
                                                setup=synth_setup,
                                                save=save_fig,
                                                plot=plot_flag, 
-                                               logger=logger)
+                                               logger=logger,
+                                               use_jackknife_plus=jackknife_plus,
+                                               no_kfold=no_kfold)
     
     logger.info("Experiment complete!")
     logger.info("Summary of results...")
@@ -230,7 +251,9 @@ def main(args):
                             filenames=["Coverage_sweep", 
                                        "AveLength_sweep", 
                                        "RMSE_sweep"], 
-                            logger=logger)
+                            logger=logger,
+                            use_jackknife_plus=jackknife_plus,
+                            no_kfold=no_kfold)
     
     logger.info("Experiments completed!")            
 
@@ -255,6 +278,8 @@ if __name__ == "__main__":
     parser.add_argument("-c", "--target-coverage", default=.1, type=float)
     parser.add_argument("-w", "--sweep-experiments", default=True, type=bool)
     parser.add_argument("-p", "--plot", default=True, type=bool)
+    parser.add_argument("-j", "--use-jackknife-plus", default=False, type=bool)
+    parser.add_argument("-k", "--no-kfold", default=False, type=bool)
     
     args = parser.parse_args()
 

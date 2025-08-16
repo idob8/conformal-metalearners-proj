@@ -135,7 +135,7 @@ def conformal_metalearner_experiment_jackknife_plus(df, metalearner="DR", quanti
     return conditional_coverage, average_interval_width, PEHE, conformity_scores
 
 
-def conformal_metalearner_experiment(df, metalearner="DR", quantile_regression=True, alpha=0.1, test_frac=0.1, use_jackknife_plus=False):
+def conformal_metalearner_experiment(df, metalearner="DR", quantile_regression=True, alpha=0.1, test_frac=0.1, use_jackknife_plus=False, no_kfold=False):
     
     # If Jackknife+ is requested, use the Jackknife+ version
     if use_jackknife_plus:
@@ -173,7 +173,8 @@ def conformal_metalearner_experiment(df, metalearner="DR", quantile_regression=T
 
     model    = conformalMetalearner(alpha=alpha, base_learner="GBM", 
                                     quantile_regression=quantile_regression, 
-                                    metalearner=metalearner) 
+                                    metalearner=metalearner,
+                                    no_kfold=no_kfold) 
     model.fit(X_train, T_train, Y_train, ps_train)
     model.conformalize(alpha, X_calib, T_calib, Y_calib, ps_calib, oracle=ITEcalib)
     T_hat_DR, T_hat_DR_l, T_hat_DR_u = model.predict(X_test)
@@ -362,14 +363,12 @@ def run(data, func, **kwargs): # alpha):
     if type(data)==tuple:
         
         for df_train, df_test in zip(data[0], data[1]):
-            
             result = func((df_train, df_test), **kwargs)# alpha)
             results.append(result)
 
     else:
 
         for df in data:
-            
             result = func(df, **kwargs)# alpha)
             results.append(result)
   

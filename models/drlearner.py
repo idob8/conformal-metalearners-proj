@@ -46,7 +46,7 @@ class conformalMetalearner:
 
   """
   
-  def __init__(self, n_folds=5, alpha=0.1, base_learner="GBM", quantile_regression=True, metalearner="DR", jackknife_plus=False):
+  def __init__(self, n_folds=5, alpha=0.1, base_learner="GBM", quantile_regression=True, metalearner="DR", jackknife_plus=False, no_kfold=False):
 
     """
         :param n_folds: the number of folds for the DR learner cross-fitting (See [1])
@@ -56,6 +56,7 @@ class conformalMetalearner:
         :param quantile_regression: Boolean for indicating whether the base learner is a quantile regression model
                                     or a point estimate of the CATE function. 
         :param jackknife_plus: Boolean for indicating whether to use Jackknife+ (ignores conformalize step)
+        :param no_kfold: Boolean for indicating whether to use simple train/test split instead of k-fold cross-validation
 
     """
 
@@ -63,6 +64,7 @@ class conformalMetalearner:
     self.base_learner        = base_learner
     self.quantile_regression = quantile_regression
     self.jackknife_plus      = jackknife_plus
+    self.no_kfold           = no_kfold
     n_estimators_nuisance    = 100
     n_estimators_target      = 100
     alpha_ = alpha #0.3 #
@@ -75,25 +77,43 @@ class conformalMetalearner:
 
     # set cross-fitting parameters and plug-in models for \mu_0 and \mu_1
     self.n_folds      = n_folds
-    self.models_0     = [base_learners_dict[self.base_learner](n_estimators=n_estimators_nuisance) for _ in range(self.n_folds)] 
-    self.models_1     = [base_learners_dict[self.base_learner](n_estimators=n_estimators_nuisance) for _ in range(self.n_folds)]
+    
+    if self.no_kfold:
+        # For no-kfold mode, we only need one set of models
+        self.models_0     = [base_learners_dict[self.base_learner](n_estimators=n_estimators_nuisance)]
+        self.models_1     = [base_learners_dict[self.base_learner](n_estimators=n_estimators_nuisance)]
+    else:
+        # For k-fold mode, we need n_folds sets of models
+        self.models_0     = [base_learners_dict[self.base_learner](n_estimators=n_estimators_nuisance) for _ in range(self.n_folds)] 
+        self.models_1     = [base_learners_dict[self.base_learner](n_estimators=n_estimators_nuisance) for _ in range(self.n_folds)]
 
     # set the meta-learner and cross-fitting parameters
-    self.skf          = StratifiedKFold(n_splits=self.n_folds)  
+    if not self.no_kfold:
+        self.skf          = StratifiedKFold(n_splits=self.n_folds)  
 
     if self.quantile_regression:
 
       base_args_u    = dict({"loss": "quantile", "alpha":1 - (alpha_/2), "n_estimators": n_estimators_target}) 
       base_args_l    = dict({"loss": "quantile", "alpha":alpha_/2, "n_estimators": n_estimators_target}) 
 
-      self.models_u  = [base_learners_dict[self.base_learner](**base_args_u) for _ in range(self.n_folds)] 
-      self.models_l  = [base_learners_dict[self.base_learner](**base_args_l) for _ in range(self.n_folds)]
+      if self.no_kfold:
+          # For no-kfold mode, we only need one set of models
+          self.models_u  = [base_learners_dict[self.base_learner](**base_args_u)]
+          self.models_l  = [base_learners_dict[self.base_learner](**base_args_l)]
+      else:
+          # For k-fold mode, we need n_folds sets of models
+          self.models_u  = [base_learners_dict[self.base_learner](**base_args_u) for _ in range(self.n_folds)] 
+          self.models_l  = [base_learners_dict[self.base_learner](**base_args_l) for _ in range(self.n_folds)]
     
     else:
 
-      base_args_m    = dict({"n_estimators": n_estimators}) 
-      self.models_m  = [base_learners_dict[self.base_learner](**base_args_m) for _ in range(self.n_folds)] 
-
+      base_args_m    = dict({"n_estimators": n_estimators_target}) 
+      if self.no_kfold:
+          # For no-kfold mode, we only need one set of models
+          self.models_m  = [base_learners_dict[self.base_learner](**base_args_m)]
+      else:
+          # For k-fold mode, we need n_folds sets of models
+          self.models_m  = [base_learners_dict[self.base_learner](**base_args_m) for _ in range(self.n_folds)]
 
 
   def get_pseudo_outcomes(self, W, pscores, Y, Y_hat_0, Y_hat_1, metalearner="DR"):
@@ -140,33 +160,57 @@ class conformalMetalearner:
 
     """
 
-    # loop over the cross-fitting folds
+    if not self.no_kfold:
+      # loop over the cross-fitting folds
+      for i, (train_index, test_index) in enumerate(self.skf.split(W, W)):
+        
+        X_1, W_1, Y_1, pscores_1 = X[train_index, :], W[train_index], Y[train_index], pscores[train_index]
+        X_2, W_2, Y_2, pscores_2 = X[test_index, :], W[test_index], Y[test_index], pscores[test_index]
 
-    for i, (train_index, test_index) in enumerate(self.skf.split(W, W)):
-      
-      X_1, W_1, Y_1, pscores_1 = X[train_index, :], W[train_index], Y[train_index], pscores[train_index]
-      X_2, W_2, Y_2, pscores_2 = X[test_index, :], W[test_index], Y[test_index], pscores[test_index]
+        # fit the plug-in models \hat{\mu}_0 and \hat{\mu}_1
+
+        self.models_0[i].fit(X_1[W_1==0, :], Y_1[W_1==0])
+        self.models_1[i].fit(X_1[W_1==1, :], Y_1[W_1==1])
+
+        Y_hat_0  = self.models_0[i].predict(X_2)
+        Y_hat_1  = self.models_1[i].predict(X_2)
+
+        # construct the pseudo-outcomes 
+
+        Y_pseudo = self.get_pseudo_outcomes(W_2, pscores_2, Y_2, Y_hat_0, Y_hat_1, self.metalearner).reshape((-1, )) 
+
+        if self.quantile_regression:
+
+          self.models_u[i].fit(X_2, Y_pseudo)
+          self.models_l[i].fit(X_2, Y_pseudo)
+        
+        else:
+
+          self.models_m[i].fit(X_2, Y_pseudo)
+    else:
+      # For no-kfold mode, we only fit one set of models
+      X_train, X_test, W_train, W_test, Y_train, Y_test, pscores_train, pscores_test = train_test_split(X, W, Y, pscores, test_size=0.2, random_state=42)
 
       # fit the plug-in models \hat{\mu}_0 and \hat{\mu}_1
 
-      self.models_0[i].fit(X_1[W_1==0, :], Y_1[W_1==0])
-      self.models_1[i].fit(X_1[W_1==1, :], Y_1[W_1==1])
+      self.models_0[0].fit(X_train[W_train==0, :], Y_train[W_train==0])
+      self.models_1[0].fit(X_train[W_train==1, :], Y_train[W_train==1])
 
-      Y_hat_0  = self.models_0[i].predict(X_2)
-      Y_hat_1  = self.models_1[i].predict(X_2)
+      Y_hat_0  = self.models_0[0].predict(X_test)
+      Y_hat_1  = self.models_1[0].predict(X_test)
 
       # construct the pseudo-outcomes 
 
-      Y_pseudo = self.get_pseudo_outcomes(W_2, pscores_2, Y_2, Y_hat_0, Y_hat_1, self.metalearner).reshape((-1, )) 
+      Y_pseudo = self.get_pseudo_outcomes(W_test, pscores_test, Y_test, Y_hat_0, Y_hat_1, self.metalearner).reshape((-1, )) 
 
       if self.quantile_regression:
 
-        self.models_u[i].fit(X_2, Y_pseudo)
-        self.models_l[i].fit(X_2, Y_pseudo)
+        self.models_u[0].fit(X_test, Y_pseudo)
+        self.models_l[0].fit(X_test, Y_pseudo)
       
       else:
 
-        self.models_m[i].fit(X_2, Y_pseudo)
+        self.models_m[0].fit(X_test, Y_pseudo)
 
 
   def predict(self, X):
@@ -189,8 +233,15 @@ class conformalMetalearner:
         y_preds_u.append(self.models_u[j].predict(X))
         y_preds_l.append(self.models_l[j].predict(X))
     
-      T_hat_DR_l = np.mean(np.array(y_preds_l), axis=0).reshape((-1,))
-      T_hat_DR_u = np.mean(np.array(y_preds_u), axis=0).reshape((-1,))
+      # For no-kfold mode, we only have one model, so no averaging needed
+      if self.no_kfold:
+          T_hat_DR_l = y_preds_l[0].reshape((-1,))
+          T_hat_DR_u = y_preds_u[0].reshape((-1,))
+      else:
+          # For k-fold mode, average predictions from all models
+          T_hat_DR_l = np.mean(np.array(y_preds_l), axis=0).reshape((-1,))
+          T_hat_DR_u = np.mean(np.array(y_preds_u), axis=0).reshape((-1,))
+      
       T_hat_DR   = (T_hat_DR_l + T_hat_DR_u) / 2
 
       # add conformal offset (only if not using Jackknife+)
@@ -206,7 +257,12 @@ class conformalMetalearner:
 
         y_preds_m.append(self.models_m[j].predict(X))
 
-      T_hat_DR   = np.mean(np.array(y_preds_m), axis=0).reshape((-1,))
+      # For no-kfold mode, we only have one model, so no averaging needed
+      if self.no_kfold:
+          T_hat_DR = y_preds_m[0].reshape((-1,))
+      else:
+          # For k-fold mode, average predictions from all models
+          T_hat_DR = np.mean(np.array(y_preds_m), axis=0).reshape((-1,))
 
       # add conformal offset (only if not using Jackknife+)
       if not self.jackknife_plus:
